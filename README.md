@@ -161,12 +161,12 @@ crontab -e
 ├── mapper.py         # Converts bunq payment dicts to Actual transaction format
 ├── state.py          # Persists last synced payment ID per account
 ├── config/
-│   ├── config.json          # Your local config (git-ignored)
+│   ├── config.json          # Your local config
 │   └── config.example.json  # Template
 ├── data/
-│   └── sync_state.json      # Auto-generated sync state (git-ignored)
+│   └── sync_state.json      # Auto-generated sync state
 └── logs/
-    └── sync.log             # Auto-generated log file (git-ignored)
+    └── sync.log             # Auto-generated log file
 ```
 
 ## Transfer detection
