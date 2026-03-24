@@ -1,4 +1,4 @@
-# bunq → Actual Budget Sync
+# Actual-Bunq-Importer
 
 ## Background
 
