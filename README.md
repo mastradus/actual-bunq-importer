@@ -148,7 +148,7 @@ crontab -e
 ```
 
 ```cron
-*/5 * * * * cd /opt/actual-budget/bunq-importer && /opt/actual-budget/venv/bin/python3 sync.py
+*/30 * * * * cd /opt/actual-budget/bunq-importer && /opt/actual-budget/venv/bin/python3 sync.py
 ```
 
 ## Project structure
