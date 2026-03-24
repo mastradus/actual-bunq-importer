@@ -1,0 +1,29 @@
+{
+  "bunq": {
+    "api_key": "YOUR_BUNQ_API_KEY",
+    "environment": "PRODUCTION",
+    "device_description": "bunq-actual-sync",
+    "installation_token": "",
+    "device_token": "",
+    "session_token": "",
+    "private_key": "",
+    "server_public_key": ""
+  },
+  "actual": {
+    "url": "http://localhost:5006",
+    "password": "YOUR_ACTUAL_PASSWORD",
+    "budget_name": "YOUR_BUDGET_NAME",
+    "cert": false,
+    "encryption_password": null,
+    "data_dir": "/tmp/bunq-actual-cache"
+  },
+  "sync": {
+    "state_file": "data/sync_state.json",
+    "log_file": "logs/sync.log",
+    "since_date": "2024-01-01",
+    "account_map": {
+      "Your bunq account name": "Your Actual account name"
+    },
+    "_resolved_account_map": {}
+  }
+}

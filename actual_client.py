@@ -35,7 +35,7 @@ class ActualClient:
                  data_dir: Optional[str] = None):
         """
         Args:
-            base_url:             URL of the Actual server, e.g. 'https://fin.ma-infra.de'
+            base_url:             URL of the Actual server
             password:             Actual server password
             budget_name:          Name of the budget file (as shown top-left in the UI)
             cert:                 Path to CA cert, or False to disable TLS verification
@@ -55,7 +55,7 @@ class ActualClient:
             base_url=self.base_url,
             password=self.password,
             file=self.budget_name,
-            cert=False,  # self-signed cert on fin.ma-infra.de
+            cert=False,
             encryption_password=self.encryption_password,
             data_dir=self.data_dir,
         )
