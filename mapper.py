@@ -25,7 +25,6 @@ from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
 
-
 def bunq_payment_to_actual(
     payment: dict,
     actual_account_id: str,
@@ -76,7 +75,13 @@ def bunq_payment_to_actual(
         # --- Transfer detection ---
         # If the counterparty IBAN belongs to one of our own accounts, this is
         # an internal transfer between two of our bunq accounts.
-        if iban_to_account_id and counter_iban and counter_iban in iban_to_account_id:
+        is_internal_transfer = (
+            iban_to_account_id is not None
+            and counter_iban is not None
+            and counter_iban in iban_to_account_id
+        )
+
+        if is_internal_transfer:
             dest_account_id = iban_to_account_id[counter_iban]
 
             # Skip the incoming side — create_transfer() creates both sides automatically.
@@ -92,15 +97,19 @@ def bunq_payment_to_actual(
                 f"Transfer detected: {imported_id} | {actual_account_id} -> {dest_account_id} "
                 f"| amount: {amount}"
             )
+
+            dest_name = payee_name or counter_iban
+            transfer_notes = f"income-auto-transfer -> {dest_name} | bunq ID: {payment_id}"
+
             return {
-                "type":             "transfer",
-                "imported_id":      imported_id,
-                "date":             tx_date,
-                "amount":           abs(amount),        # create_transfer() expects positive amount
-                "source_account_id": actual_account_id, # money leaves this account
-                "dest_account_id":  dest_account_id,    # money arrives here
-                "notes":            notes,
-                "cleared":          True,
+                "type":              "transfer",
+                "imported_id":       imported_id,
+                "date":              tx_date,
+                "amount":            abs(amount),
+                "source_account_id": actual_account_id,
+                "dest_account_id":   dest_account_id,
+                "notes":             transfer_notes,
+                "cleared":           True,
             }
 
         # --- Regular transaction ---
@@ -108,7 +117,7 @@ def bunq_payment_to_actual(
             "type":        "transaction",
             "imported_id": imported_id,
             "date":        tx_date,
-            "amount":      amount,                      # Decimal, negative = outgoing
+            "amount":      amount,
             "account_id":  actual_account_id,
             "payee_name":  payee_name,
             "notes":       notes,
