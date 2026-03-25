@@ -346,15 +346,21 @@ def run_sync(config, config_path, full_sync=False, since_date=None):
         bunq_account_id = int(bunq_account_id_str)
         last_id = None if full_sync else state.get_last_payment_id(bunq_account_id)
 
+
+        # Only apply since_date filter when no state exists yet (first sync)
+        # For incremental sync, newer_than_id alone is sufficient
+        effective_since = since_date if not last_id else None
+
         if last_id:
             logger.info(f"Account {bunq_account_id}: incremental sync (from ID {last_id})")
         else:
-            logger.info(f"Account {bunq_account_id}: full sync")
+            logger.info(f"Account {bunq_account_id}: full sync" +
+                       (f" (since {effective_since})" if effective_since else ""))
 
         payments = bunq_client.get_payments(
             session_token, user_id, bunq_account_id,
             newer_than_id=last_id,
-            since_date=since_date,
+            since_date=effective_since,
         )
 
         if not payments:
