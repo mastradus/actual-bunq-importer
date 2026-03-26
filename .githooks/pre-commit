@@ -1,0 +1,11 @@
+#!/bin/sh
+# Prevent accidental staging of secrets and generated dirs
+
+BLOCKED="config/config.json data/ logs/ *.log"
+
+for pattern in $BLOCKED; do
+    if git diff --cached --name-only | grep -qE "^${pattern}"; then
+        echo "ERROR: Blocked path staged: ${pattern} — aborting commit."
+        exit 1
+    fi
+done
