@@ -28,6 +28,7 @@ import bunq_client
 from actual_client import ActualClient
 from mapper import bunq_payment_to_actual
 from state import SyncState
+from salary_detector import detect_salary_transfer_ids
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
 def setup_logging(log_file=None, verbose=False):
@@ -362,23 +363,31 @@ def run_sync(config, config_path, full_sync=False, since_date=None):
             newer_than_id=last_id,
             since_date=effective_since,
         )
-
+ 
         if not payments:
             logger.info(f"  No new payments for account {bunq_account_id}.")
             continue
-
+ 
+        # Detect which internal transfers were triggered by a salary payment
+        salary_transfer_ids = detect_salary_transfer_ids(payments, iban_to_account_id)
+ 
         max_payment_id = last_id or 0
         transactions = []
         for payment in payments:
             max_payment_id = max(max_payment_id, payment["id"])
-            tx = bunq_payment_to_actual(payment, actual_account_id, iban_to_account_id)
+            tx = bunq_payment_to_actual(
+                payment,
+                actual_account_id,
+                iban_to_account_id,
+                is_salary_transfer=payment["id"] in salary_transfer_ids,
+            )
             if tx:
                 transactions.append(tx)
-
         result = actual.import_transactions(transactions)
 
         if max_payment_id and max_payment_id != (last_id or 0):
-            state.set_last_payment_id(bunq_account_id, max_payment_id)
+            state.set_last_payment_id(bunq_account_id, max_payment_id) 
+
 
         logger.info(
             f"  Account {bunq_account_id}: "

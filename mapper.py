@@ -13,6 +13,10 @@ Transfer detection:
   bunq sets counterparty_alias.iban to the IBAN of the destination account.
   If that IBAN matches one of our own accounts (from the iban_map), it's a transfer.
 
+Transfer naming:
+  - income-auto-transfer: internal transfer triggered by a salary payment (same day, within 2h)
+  - internal-transfer:    all other internal transfers between own accounts
+
 bunq/Actual amount convention:
   - Negative = money leaving the account (expense / transfer out)
   - Positive = money entering the account (income / transfer in)
@@ -25,10 +29,12 @@ from datetime import date, datetime
 
 logger = logging.getLogger(__name__)
 
+
 def bunq_payment_to_actual(
     payment: dict,
     actual_account_id: str,
     iban_to_account_id: dict = None,
+    is_salary_transfer: bool = False,
 ) -> dict | None:
     """Convert a bunq payment dict to an actualpy-compatible transaction dict.
 
@@ -37,6 +43,8 @@ def bunq_payment_to_actual(
         actual_account_id:   UUID of the Actual account this payment belongs to
         iban_to_account_id:  Optional map of IBAN -> Actual account UUID for own accounts.
                              Used to detect internal transfers.
+        is_salary_transfer:  If True, this internal transfer was triggered by a salary payment.
+                             Affects the notes label (income-auto-transfer vs internal-transfer).
 
     Returns:
         Dict with type="transaction" or type="transfer", or None on error.
@@ -95,11 +103,14 @@ def bunq_payment_to_actual(
 
             logger.debug(
                 f"Transfer detected: {imported_id} | {actual_account_id} -> {dest_account_id} "
-                f"| amount: {amount}"
+                f"| amount: {amount} | salary_transfer={is_salary_transfer}"
             )
 
             dest_name = payee_name or counter_iban
-            transfer_notes = f"income-auto-transfer -> {dest_name} | bunq ID: {payment_id}"
+            if is_salary_transfer:
+                transfer_notes = f"income-auto-transfer -> {dest_name} | bunq ID: {payment_id}"
+            else:
+                transfer_notes = f"internal-transfer -> {dest_name} | bunq ID: {payment_id}"
 
             return {
                 "type":              "transfer",
