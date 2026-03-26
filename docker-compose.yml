@@ -1,0 +1,27 @@
+services:
+  sync:
+    build: .
+    container_name: bunq-actual-sync
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persist secrets and state outside the image
+      - ./config:/app/config
+      - ./data:/app/data
+      - ./logs:/app/logs
+      # Mount templates for live editing without rebuild
+      - ./templates:/app/templates
+    environment:
+      - TZ=Europe/Berlin
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    dns:
+      - 10.10.4.1
+      - 1.1.1.1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

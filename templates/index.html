@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>bunq → Actual Sync</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: #12151b; }
+    ::-webkit-scrollbar-thumb { background: #2d3340; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #3d4454; }
+    .log-error   { color: #f87171; }
+    .log-warning { color: #fbbf24; }
+    .log-debug   { color: #4b5568; }
+    .log-info    { color: #9ca3af; }
+  </style>
+</head>
+<body class="bg-[#12151b] text-[#dde1e8] h-full flex antialiased" x-data="appShell()">
+
+  <!-- ======================================================================
+       SIDEBAR
+       ====================================================================== -->
+  <aside class="w-52 min-h-screen bg-[#181c24] border-r border-[#252b38] flex flex-col shrink-0">
+
+    <!-- Logo -->
+    <div class="px-5 pt-5 pb-4 border-b border-[#252b38]">
+      <div class="text-[10px] font-mono tracking-widest text-[#4b5568] uppercase mb-0.5">bunq</div>
+      <div class="text-sm font-semibold text-[#dde1e8]">Actual Sync</div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="flex-1 py-3">
+      {% set nav_items = [
+        ('/',         'Dashboard',     'dashboard'),
+        ('/provider', 'Provider',      'provider'),
+        ('/accounts', 'Accounts',      'accounts'),
+        ('/config',   'Configuration', 'config'),
+        ('/logs',     'Logs',          'logs'),
+      ] %}
+      {% for href, label, name in nav_items %}
+      <a href="{{ href }}"
+         class="flex items-center gap-2.5 px-5 py-2 text-sm transition-colors
+         {% if page == name %}
+           text-[#60a5fa] bg-[#1e2535] font-medium border-l-2 border-[#60a5fa]
+         {% else %}
+           text-[#8892a4] hover:text-[#dde1e8] hover:bg-[#1c2030] border-l-2 border-transparent
+         {% endif %}">
+        {{ label }}
+      </a>
+      {% endfor %}
+    </nav>
+
+    <!-- Status indicator -->
+    <div class="px-5 py-4 border-t border-[#252b38]">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full shrink-0 transition-colors"
+          :class="{
+            'bg-[#4ade80]': statusData && statusData.status === 'idle',
+            'bg-[#fbbf24] animate-pulse': statusData && statusData.status === 'running',
+            'bg-[#f87171]': statusData && statusData.status === 'error',
+            'bg-[#374151]': !statusData
+          }"></span>
+        <span class="text-xs text-[#8892a4]" x-text="statusData ? statusData.status : 'checking…'"></span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ======================================================================
+       MAIN CONTENT
+       ====================================================================== -->
+  <main class="flex-1 overflow-auto">
+
+    <!-- ==================================================================
+         DASHBOARD
+         ================================================================== -->
+    {% if page == "dashboard" %}
+    <div class="p-8 max-w-4xl">
+
+      <h1 class="text-lg font-semibold mb-6 text-[#dde1e8]">Dashboard</h1>
+
+      <!-- Stat cards -->
+      <div class="grid grid-cols-3 gap-4 mb-7">
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-4">
+          <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-2">Status</div>
+          <div class="text-base font-mono"
+            :class="{
+              'text-[#4ade80]': statusData && statusData.status === 'idle',
+              'text-[#fbbf24]': statusData && statusData.status === 'running',
+              'text-[#f87171]': statusData && statusData.status === 'error',
+              'text-[#4b5568]': !statusData
+            }"
+            x-text="statusData ? statusData.status : '—'">—</div>
+        </div>
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-4">
+          <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-2">Last Run</div>
+          <div class="text-sm text-[#dde1e8]" x-text="lastRunTime()">—</div>
+        </div>
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-4">
+          <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-2">Last Result</div>
+          <div class="text-sm font-mono" x-text="lastRunResult()">—</div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="flex items-center gap-2 mb-8">
+        <button @click="runSync(false)"
+          :disabled="isRunning || !syncEnabled"
+          class="px-4 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-40 disabled:cursor-not-allowed
+                 rounded text-sm font-medium transition-colors">
+          Run Sync
+        </button>
+        <button @click="showFullSync = true"
+          :disabled="isRunning || !syncEnabled"
+          class="px-4 py-2 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                 disabled:opacity-40 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors">
+          Full Sync…
+        </button>
+        <button @click="refreshStatus()"
+          class="px-4 py-2 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                 rounded text-sm text-[#8892a4] transition-colors">
+          ↻ Refresh
+        </button>
+
+        <!-- Sync enable/disable toggle -->
+        <div class="ml-auto flex items-center gap-3">
+          <span class="text-xs"
+            :class="syncEnabled ? 'text-[#4ade80]' : 'text-[#f87171]'"
+            x-text="syncEnabled ? 'Auto-sync on' : 'Auto-sync off'"></span>
+          <button @click="toggleSync()"
+            class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent
+                   transition-colors duration-200 focus:outline-none"
+            :class="syncEnabled ? 'bg-[#16a34a]' : 'bg-[#374151]'"
+            :title="syncEnabled ? 'Click to disable auto-sync' : 'Click to enable auto-sync'">
+            <span class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow
+                         transition duration-200"
+              :class="syncEnabled ? 'translate-x-5' : 'translate-x-0'"></span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Full sync modal -->
+      <div x-show="showFullSync" x-cloak
+        class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm"
+        @keydown.escape.window="showFullSync = false">
+        <div class="bg-[#181c24] border border-[#252b38] rounded-xl p-6 w-80 shadow-2xl">
+          <h3 class="font-semibold mb-1 text-[#dde1e8]">Full Sync</h3>
+          <p class="text-xs text-[#8892a4] mb-4">Re-imports all transactions, ignoring sync state.</p>
+          <div class="mb-5">
+            <label class="block text-xs text-[#8892a4] mb-1.5">Since date <span class="text-[#4b5568]">(optional)</span></label>
+            <input type="date" x-model="fullSyncSince"
+              class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm
+                     text-[#dde1e8] focus:outline-none focus:border-[#60a5fa]">
+            <div class="mt-1 text-[10px] text-[#4b5568]">Leave empty to use since_date from config.</div>
+          </div>
+          <div class="flex gap-2">
+            <button @click="runSync(true)"
+              class="flex-1 px-3 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] rounded text-sm font-medium transition-colors">
+              Run Full Sync
+            </button>
+            <button @click="showFullSync = false"
+              class="px-3 py-2 bg-[#12151b] hover:bg-[#1e2535] border border-[#252b38] rounded text-sm transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Job history -->
+      <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">Recent Jobs</div>
+      <div class="bg-[#181c24] border border-[#252b38] rounded-lg overflow-hidden">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-[#252b38]">
+              <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">ID</th>
+              <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">Type</th>
+              <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">Status</th>
+              <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">Started</th>
+              <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">Duration</th>
+              <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for job in jobs %}
+            <tr class="border-b border-[#1e2535] last:border-0 hover:bg-[#1a1f2d] transition-colors cursor-default"
+              @click="showJobOutput({{ job | tojson }})"
+              title="Click to view output">
+              <td class="px-4 py-2.5 font-mono text-xs text-[#4b5568]">#{{ job.id }}</td>
+              <td class="px-4 py-2.5">
+                <span class="font-mono text-xs text-[#8892a4] bg-[#12151b] px-2 py-0.5 rounded">{{ job.job_type }}</span>
+              </td>
+              <td class="px-4 py-2.5">
+                {% if job.status == 'success' %}
+                  <span class="text-xs text-[#4ade80]">● success</span>
+                {% elif job.status == 'error' %}
+                  <span class="text-xs text-[#f87171]">● error</span>
+                {% elif job.status == 'running' %}
+                  <span class="text-xs text-[#fbbf24]">● running</span>
+                {% else %}
+                  <span class="text-xs text-[#8892a4]">● {{ job.status }}</span>
+                {% endif %}
+              </td>
+              <td class="px-4 py-2.5 text-xs text-[#8892a4] font-mono">
+                {{ (job.started_at or '')[:16].replace('T', ' ') or '—' }}
+              </td>
+              <td class="px-4 py-2.5 text-xs text-[#4b5568] font-mono">
+                {% if job.started_at and job.finished_at %}
+                  {% set s = job.started_at %}
+                  {% set e = job.finished_at %}
+                  {{ e[:16].replace('T', ' ') }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="px-4 py-2.5 text-xs font-mono">
+                {% if job.status in ('success', 'error') and job.imported is not none %}
+                  <span class="text-[#4ade80]">↑{{ job.imported }}</span>
+                  <span class="text-[#4b5568] mx-1">/</span>
+                  <span class="text-[#8892a4]">{{ job.skipped }}s</span>
+                  {% if job.errors > 0 %}
+                  <span class="text-[#4b5568] mx-1">/</span>
+                  <span class="text-[#f87171]">{{ job.errors }}e</span>
+                  {% endif %}
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="6" class="px-4 py-8 text-center text-sm text-[#4b5568]">No jobs yet — run a sync to get started.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Job output modal -->
+      <div x-show="selectedJob" x-cloak
+        class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 backdrop-blur-sm"
+        @keydown.escape.window="selectedJob = null">
+        <div class="bg-[#181c24] border border-[#252b38] rounded-xl p-0 w-3/4 max-w-3xl shadow-2xl flex flex-col max-h-[80vh]">
+          <div class="flex items-center justify-between px-5 py-4 border-b border-[#252b38]">
+            <div class="flex items-center gap-3">
+              <span class="font-mono text-xs text-[#4b5568]" x-text="'Job #' + (selectedJob?.id || '')"></span>
+              <span class="font-mono text-xs bg-[#12151b] px-2 py-0.5 rounded text-[#8892a4]"
+                x-text="selectedJob?.job_type || ''"></span>
+              <span class="text-xs"
+                :class="selectedJob?.status === 'success' ? 'text-[#4ade80]' : selectedJob?.status === 'error' ? 'text-[#f87171]' : 'text-[#fbbf24]'"
+                x-text="'● ' + (selectedJob?.status || '')"></span>
+            </div>
+            <button @click="selectedJob = null" class="text-[#4b5568] hover:text-[#8892a4] text-lg">✕</button>
+          </div>
+          <div class="flex-1 overflow-auto bg-[#0d1017] p-4 font-mono text-xs leading-5 text-[#9ca3af] rounded-b-xl">
+            <template x-if="selectedJob?.output">
+              <pre x-text="selectedJob.output" class="whitespace-pre-wrap"></pre>
+            </template>
+            <template x-if="!selectedJob?.output">
+              <div class="text-[#4b5568]">No output captured.</div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ==================================================================
+         PROVIDER
+         ================================================================== -->
+    {% elif page == "provider" %}
+    <div class="p-8 max-w-2xl" x-data="providerPage()">
+      <h1 class="text-lg font-semibold mb-6 text-[#dde1e8]">Provider Configuration</h1>
+
+      <!-- Provider cards -->
+      <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">Bank Provider</div>
+      <div class="grid grid-cols-2 gap-3 mb-8">
+        <div @click="setProvider('bunq')"
+          class="bg-[#181c24] border rounded-lg p-4 cursor-pointer transition-all"
+          :class="provider === 'bunq' ? 'border-[#60a5fa] shadow-[0_0_0_1px_#60a5fa20]' : 'border-[#252b38] hover:border-[#3d4454]'">
+          <div class="flex items-start justify-between mb-2">
+            <span class="font-semibold text-sm">bunq</span>
+            <span class="text-[10px] px-2 py-0.5 bg-[#0f2a1a] text-[#4ade80] rounded border border-[#1a4a2a]">Active</span>
+          </div>
+          <p class="text-xs text-[#8892a4] leading-relaxed">Dutch mobile bank with full REST API. Supports multiple accounts, real-time data, and IBAN-based transfer detection.</p>
+        </div>
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-4 opacity-40 cursor-not-allowed">
+          <div class="flex items-start justify-between mb-2">
+            <span class="font-semibold text-sm">GoCardless</span>
+            <span class="text-[10px] px-2 py-0.5 bg-[#1a1d24] text-[#4b5568] rounded border border-[#252b38]">Coming soon</span>
+          </div>
+          <p class="text-xs text-[#8892a4] leading-relaxed">Open Banking API covering 2300+ European banks via PSD2 access.</p>
+        </div>
+      </div>
+
+      <!-- bunq config form -->
+      <div x-show="provider === 'bunq'">
+        <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">bunq Settings</div>
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-5 space-y-4 mb-4">
+          <div>
+            <label class="block text-xs text-[#8892a4] mb-1.5">API Key</label>
+            <input type="password" x-model="form.api_key"
+              placeholder="Enter bunq API key…"
+              class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm font-mono
+                     text-[#dde1e8] placeholder-[#2d3340] focus:outline-none focus:border-[#60a5fa] transition-colors">
+          </div>
+          <div>
+            <label class="block text-xs text-[#8892a4] mb-1.5">Device Description</label>
+            <input type="text" x-model="form.device_description"
+              class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm
+                     text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+          </div>
+
+          <!-- Setup status badges -->
+          <div class="pt-1 border-t border-[#252b38] flex gap-4">
+            <div class="flex items-center gap-1.5 text-xs">
+              <span class="text-[#4b5568]">Installation</span>
+              {% if config.get('bunq', {}).get('installation_token') %}
+                <span class="text-[#4ade80] text-[10px] font-mono">● registered</span>
+              {% else %}
+                <span class="text-[#f87171] text-[10px] font-mono">● missing</span>
+              {% endif %}
+            </div>
+            <div class="flex items-center gap-1.5 text-xs">
+              <span class="text-[#4b5568]">Device</span>
+              {% if config.get('bunq', {}).get('device_token') %}
+                <span class="text-[#4ade80] text-[10px] font-mono">● registered</span>
+              {% else %}
+                <span class="text-[#f87171] text-[10px] font-mono">● missing</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-2 mb-4">
+          <button @click="saveConfig()"
+            class="px-4 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] rounded text-sm font-medium transition-colors">
+            Save
+          </button>
+          <button @click="runSetup()" :disabled="busy"
+            class="px-4 py-2 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                   disabled:opacity-40 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors">
+            <span x-text="busy && busyAction === 'setup' ? 'Running…' : 'Run Setup'"></span>
+          </button>
+          <button @click="testConnection()" :disabled="busy"
+            class="px-4 py-2 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                   disabled:opacity-40 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors">
+            <span x-text="busy && busyAction === 'test' ? 'Testing…' : 'Test Connection'"></span>
+          </button>
+        </div>
+
+        <div x-show="message" x-cloak
+          class="px-4 py-3 rounded-lg text-sm border"
+          :class="messageOk
+            ? 'bg-[#0f2a1a] text-[#4ade80] border-[#1a4a2a]'
+            : 'bg-[#2a0f0f] text-[#f87171] border-[#4a1a1a]'"
+          x-text="message"></div>
+      </div>
+    </div>
+
+    <!-- ==================================================================
+         ACCOUNTS
+         ================================================================== -->
+    {% elif page == "accounts" %}
+    <div class="p-8 max-w-3xl" x-data="accountsPage()">
+      <h1 class="text-lg font-semibold mb-2 text-[#dde1e8]">Account Mapping</h1>
+      <p class="text-sm text-[#8892a4] mb-6">
+        Map each bunq account to its Actual Budget counterpart.
+        Saved directly to <code class="font-mono text-xs bg-[#181c24] px-1.5 py-0.5 rounded border border-[#252b38]">config.json</code>.
+      </p>
+
+      <div class="flex gap-2 mb-6">
+        <button @click="loadAccounts()" :disabled="loading"
+          class="px-4 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-40 disabled:cursor-not-allowed
+                 rounded text-sm font-medium transition-colors">
+          <span x-text="loading ? 'Loading…' : 'Load Accounts'"></span>
+        </button>
+        <button @click="initAccounts(false)" :disabled="loading"
+          class="px-4 py-2 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                 disabled:opacity-40 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors">
+          Init (on-budget)
+        </button>
+        <button @click="initAccounts(true)" :disabled="loading"
+          class="px-4 py-2 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                 disabled:opacity-40 disabled:cursor-not-allowed rounded text-sm font-medium transition-colors">
+          Init (off-budget)
+        </button>
+      </div>
+
+      <div x-show="error" x-cloak
+        class="mb-4 px-4 py-3 bg-[#2a0f0f] text-[#f87171] border border-[#4a1a1a] rounded-lg text-sm"
+        x-text="error"></div>
+
+      <div x-show="notice" x-cloak
+        class="mb-4 px-4 py-3 bg-[#0f2a1a] text-[#4ade80] border border-[#1a4a2a] rounded-lg text-sm"
+        x-text="notice"></div>
+
+      <!-- Live mapping UI (after loading) -->
+      <div x-show="bunqAccounts.length > 0">
+        <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">Account Map</div>
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg overflow-hidden mb-4">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="border-b border-[#252b38]">
+                <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">bunq Account</th>
+                <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">IBAN</th>
+                <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">Balance</th>
+                <th class="text-left px-4 py-2.5 text-[10px] font-semibold uppercase tracking-wide text-[#4b5568]">→ Actual Account</th>
+              </tr>
+            </thead>
+            <tbody>
+              <template x-for="acc in bunqAccounts" :key="acc.id">
+                <tr class="border-b border-[#1e2535] last:border-0">
+                  <td class="px-4 py-2.5 font-medium text-sm" x-text="acc.description"></td>
+                  <td class="px-4 py-2.5 font-mono text-xs text-[#4b5568]" x-text="acc.iban || '—'"></td>
+                  <td class="px-4 py-2.5 font-mono text-xs text-[#8892a4]"
+                    x-text="acc.balance ? acc.balance + ' ' + (acc.currency || 'EUR') : '—'"></td>
+                  <td class="px-4 py-2.5">
+                    <select x-model="mapping[acc.description]"
+                      class="w-full bg-[#12151b] border border-[#252b38] rounded px-2 py-1.5 text-xs
+                             text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+                      <option value="">— not mapped —</option>
+                      <template x-for="act in actualAccounts" :key="act.id">
+                        <option :value="act.name"
+                          x-text="act.name + (act.offbudget ? ' [off-budget]' : '')"></option>
+                      </template>
+                    </select>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+        <button @click="saveMapping()"
+          class="px-4 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] rounded text-sm font-medium transition-colors">
+          Save Mapping
+        </button>
+      </div>
+
+      <!-- Current mapping from config (always visible) -->
+      {% if account_map %}
+      <div class="mt-8">
+        <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">Current Mapping (config.json)</div>
+        <div class="bg-[#181c24] border border-[#252b38] rounded-lg overflow-hidden">
+          <table class="w-full">
+            <tbody>
+              {% for bunq_name, actual_name in account_map.items() %}
+              <tr class="border-b border-[#1e2535] last:border-0">
+                <td class="px-4 py-2.5 font-mono text-xs text-[#dde1e8]">{{ bunq_name }}</td>
+                <td class="px-4 py-2.5 text-[#4b5568] text-xs">→</td>
+                <td class="px-4 py-2.5 font-mono text-xs text-[#8892a4]">{{ actual_name }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% else %}
+      <div class="mt-6 px-4 py-4 bg-[#181c24] border border-[#252b38] rounded-lg text-sm text-[#4b5568]">
+        No account mapping configured. Load accounts above and map them, or run Init to auto-create from bunq.
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- ==================================================================
+         CONFIGURATION
+         ================================================================== -->
+    {% elif page == "config" %}
+    <div class="p-8 max-w-xl" x-data="configPage()">
+      <h1 class="text-lg font-semibold mb-6 text-[#dde1e8]">Actual Budget Configuration</h1>
+
+      <!-- Server section -->
+      <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">Server</div>
+      <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-5 space-y-4 mb-6">
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">Server URL</label>
+          <input type="url" x-model="form.url"
+            class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm font-mono
+                   text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+        </div>
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">Password</label>
+          <input type="password" x-model="form.password"
+            :placeholder="{{ config.get('actual', {}).get('password') and '\'Password saved — leave blank to keep\'' or '\'Enter Actual password\'' }}"
+            class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm
+                   text-[#dde1e8] placeholder-[#2d3340] focus:outline-none focus:border-[#60a5fa] transition-colors">
+        </div>
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">Budget Name</label>
+          <input type="text" x-model="form.budget_name"
+            class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm
+                   text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+        </div>
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">
+            Encryption Password
+            <span class="text-[#4b5568] font-normal">(optional)</span>
+          </label>
+          <input type="password" x-model="form.encryption_password"
+            placeholder="Leave blank if not encrypted"
+            class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm
+                   text-[#dde1e8] placeholder-[#2d3340] focus:outline-none focus:border-[#60a5fa] transition-colors">
+        </div>
+      </div>
+
+      <!-- Sync section -->
+      <div class="text-[11px] font-medium uppercase tracking-wide text-[#4b5568] mb-3">Sync</div>
+      <div class="bg-[#181c24] border border-[#252b38] rounded-lg p-5 space-y-4 mb-6">
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">
+            Since Date
+            <span class="text-[#4b5568] font-normal">(default cutoff for full sync)</span>
+          </label>
+          <input type="date" x-model="form.since_date"
+            class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm
+                   text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+        </div>
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">Cron Schedule</label>
+          <div class="flex gap-2">
+            <input type="text" x-model="form.cron_schedule"
+              @input.debounce.500="fetchCronDesc()"
+              class="flex-1 bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm font-mono
+                     text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+            <select @change="form.cron_schedule = $event.target.value; cronDesc = cronPresets[form.cron_schedule] || form.cron_schedule"
+              class="bg-[#12151b] border border-[#252b38] rounded px-2 py-2 text-xs
+                     text-[#8892a4] focus:outline-none focus:border-[#60a5fa] transition-colors cursor-pointer">
+              <option value="">Presets…</option>
+              {% for expr, label in cron_presets.items() %}
+              <option value="{{ expr }}">{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="mt-1.5 text-xs text-[#60a5fa]" x-text="cronDesc"></div>
+        </div>
+        <div>
+          <label class="block text-xs text-[#8892a4] mb-1.5">
+            Timezone
+            <span class="text-[#4b5568] font-normal">(IANA format, e.g. Europe/Berlin)</span>
+          </label>
+          <input type="text" x-model="form.timezone"
+            list="tz-suggestions"
+            class="w-full bg-[#12151b] border border-[#252b38] rounded px-3 py-2 text-sm font-mono
+                   text-[#dde1e8] focus:outline-none focus:border-[#60a5fa] transition-colors">
+          <datalist id="tz-suggestions">
+            <option value="Europe/Berlin">Europe/Berlin</option>
+            <option value="Europe/London">Europe/London</option>
+            <option value="Europe/Paris">Europe/Paris</option>
+            <option value="Europe/Amsterdam">Europe/Amsterdam</option>
+            <option value="Europe/Zurich">Europe/Zurich</option>
+            <option value="America/New_York">America/New_York</option>
+            <option value="America/Los_Angeles">America/Los_Angeles</option>
+            <option value="UTC">UTC</option>
+          </datalist>
+        </div>
+      </div>
+
+      <button @click="saveConfig()" :disabled="saving"
+        class="px-4 py-2 bg-[#2563eb] hover:bg-[#1d4ed8] disabled:opacity-40 disabled:cursor-not-allowed
+               rounded text-sm font-medium transition-colors">
+        <span x-text="saving ? 'Saving…' : 'Save Configuration'"></span>
+      </button>
+
+      <div x-show="saved" x-cloak
+        class="mt-4 px-4 py-3 bg-[#0f2a1a] text-[#4ade80] border border-[#1a4a2a] rounded-lg text-sm">
+        Configuration saved.
+      </div>
+      <div x-show="saveError" x-cloak
+        class="mt-4 px-4 py-3 bg-[#2a0f0f] text-[#f87171] border border-[#4a1a1a] rounded-lg text-sm"
+        x-text="saveError"></div>
+    </div>
+
+    <!-- ==================================================================
+         LOGS
+         ================================================================== -->
+    {% elif page == "logs" %}
+    <div class="flex flex-col p-8" style="height: 100vh" x-data="logsPage()">
+      <div class="flex items-center justify-between mb-4">
+        <h1 class="text-lg font-semibold text-[#dde1e8]">Log Viewer</h1>
+        <div class="flex items-center gap-3">
+          <label class="flex items-center gap-2 text-xs text-[#8892a4] cursor-pointer select-none">
+            <input type="checkbox" x-model="autoRefresh" @change="toggleAutoRefresh()"
+              class="accent-[#60a5fa]">
+            Auto-refresh (3s)
+          </label>
+          <button @click="loadLogs()"
+            class="px-3 py-1.5 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                   rounded text-xs transition-colors">
+            ↻ Refresh
+          </button>
+          <button @click="scrollToBottom()"
+            class="px-3 py-1.5 bg-[#181c24] hover:bg-[#1e2535] border border-[#252b38]
+                   rounded text-xs text-[#8892a4] transition-colors">
+            ↓ Bottom
+          </button>
+        </div>
+      </div>
+
+      <div id="log-container"
+        class="flex-1 overflow-auto bg-[#0d1017] border border-[#252b38] rounded-lg p-4
+               font-mono text-xs leading-5 min-h-0">
+        <template x-for="(line, i) in logLines" :key="i">
+          <div :class="logClass(line)" x-text="line" class="whitespace-pre-wrap break-all"></div>
+        </template>
+        <div x-show="logLines.length === 0 && loaded" class="text-[#4b5568] py-4">
+          No log entries found in <span class="font-mono">logs/sync.log</span>.
+        </div>
+        <div x-show="!loaded" class="text-[#4b5568] py-4">Loading…</div>
+      </div>
+    </div>
+    {% endif %}
+
+  </main>
+
+  <!-- ======================================================================
+       ALPINE.JS COMPONENTS
+       ====================================================================== -->
+  <script>
+  // ---------------------------------------------------------------------------
+  // Shared app shell — status polling
+  // ---------------------------------------------------------------------------
+  function appShell() {
+    return {
+      statusData: null,
+      isRunning: false,
+      syncEnabled: true,
+      showFullSync: false,
+      fullSyncSince: '',
+      selectedJob: null,
+
+      async init() {
+        await this.refreshStatus();
+        setInterval(() => this.refreshStatus(), 15000);
+      },
+
+      async refreshStatus() {
+        try {
+          const r = await fetch('/api/status');
+          this.statusData = await r.json();
+          this.isRunning = this.statusData.status === 'running';
+          this.syncEnabled = this.statusData.sync_enabled ?? true;
+        } catch (e) {
+          console.warn('Status poll failed:', e);
+        }
+      },
+
+      async toggleSync() {
+        const newState = !this.syncEnabled;
+        const r = await fetch(`/api/sync/enabled?enabled=${newState}`, { method: 'POST' });
+        const d = await r.json();
+        this.syncEnabled = d.sync_enabled;
+      },
+
+      lastRunTime() {
+        const j = this.statusData?.last_job;
+        if (!j?.started_at) return '—';
+        return j.started_at.slice(0, 16).replace('T', ' ');
+      },
+
+      lastRunResult() {
+        const j = this.statusData?.last_job;
+        if (!j) return '—';
+        if (j.imported !== null && j.imported !== undefined) {
+          return `↑${j.imported} / ${j.skipped}s` + (j.errors > 0 ? ` / ${j.errors}e` : '');
+        }
+        return j.status;
+      },
+
+      async runSync(full) {
+        this.showFullSync = false;
+        let url = `/api/sync/run?full=${full}`;
+        if (full && this.fullSyncSince) url += `&since=${this.fullSyncSince}`;
+        try {
+          const r = await fetch(url, { method: 'POST' });
+          const d = await r.json();
+          if (!d.job_id) alert(d.detail || 'Could not start sync.');
+        } catch (e) {
+          alert('Request failed: ' + e.message);
+        }
+        await this.refreshStatus();
+      },
+
+      showJobOutput(job) {
+        this.selectedJob = job;
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Provider page
+  // ---------------------------------------------------------------------------
+  function providerPage() {
+    const cfg = {{ config | default({}) | tojson }};
+    return {
+      provider: cfg.provider || 'bunq',
+      form: {
+        api_key: '',
+        device_description: cfg.bunq?.device_description || 'bunq-actual-sync',
+      },
+      busy: false,
+      busyAction: '',
+      message: '',
+      messageOk: true,
+
+      setProvider(p) {
+        this.provider = p;
+        fetch('/api/provider/select', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ provider: p }),
+        });
+      },
+
+      async saveConfig() {
+        const r = await fetch('/api/provider/config', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(this.form),
+        });
+        const d = await r.json();
+        this.message = d.status === 'ok' ? 'Configuration saved.' : (d.detail || 'Error saving.');
+        this.messageOk = d.status === 'ok';
+        setTimeout(() => this.message = '', 4000);
+      },
+
+      async runSetup() {
+        this.busy = true;
+        this.busyAction = 'setup';
+        this.message = 'Setup started — check Logs for progress.';
+        this.messageOk = true;
+        try {
+          const r = await fetch('/api/setup/run', { method: 'POST' });
+          const d = await r.json();
+          if (d.detail) {
+            this.message = d.detail;
+            this.messageOk = false;
+          } else {
+            this.message = `Setup running (job #${d.job_id}) — check Logs for progress.`;
+          }
+        } catch (e) {
+          this.message = 'Request failed: ' + e.message;
+          this.messageOk = false;
+        } finally {
+          this.busy = false;
+          this.busyAction = '';
+        }
+      },
+
+      async testConnection() {
+        this.busy = true;
+        this.busyAction = 'test';
+        this.message = '';
+        try {
+          const r = await fetch('/api/provider/test', { method: 'POST' });
+          const d = await r.json();
+          this.message = d.message;
+          this.messageOk = d.success;
+        } catch (e) {
+          this.message = 'Request failed: ' + e.message;
+          this.messageOk = false;
+        } finally {
+          this.busy = false;
+          this.busyAction = '';
+        }
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Accounts page
+  // ---------------------------------------------------------------------------
+  function accountsPage() {
+    const existingMap = {{ account_map | default({}) | tojson }};
+    return {
+      bunqAccounts: [],
+      actualAccounts: [],
+      mapping: {...existingMap},
+      loading: false,
+      error: '',
+      notice: '',
+
+      async loadAccounts() {
+        this.loading = true;
+        this.error = '';
+        try {
+          const [br, ar] = await Promise.all([
+            fetch('/api/accounts/bunq'),
+            fetch('/api/accounts/actual'),
+          ]);
+          const bd = await br.json();
+          const ad = await ar.json();
+
+          const errs = [bd.error, ad.error].filter(Boolean);
+          this.error = errs.join(' | ');
+          this.bunqAccounts = bd.accounts || [];
+          this.actualAccounts = ad.accounts || [];
+
+          // Pre-fill existing mapping
+          for (const [k, v] of Object.entries(existingMap)) {
+            if (!(k in this.mapping)) this.mapping[k] = v;
+          }
+        } finally {
+          this.loading = false;
+        }
+      },
+
+      async saveMapping() {
+        // Remove empty mappings
+        const clean = {};
+        for (const [k, v] of Object.entries(this.mapping)) {
+          if (v) clean[k] = v;
+        }
+        const r = await fetch('/api/accounts/map', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ account_map: clean }),
+        });
+        const d = await r.json();
+        if (d.status === 'ok') {
+          this.notice = 'Mapping saved to config.json.';
+          setTimeout(() => this.notice = '', 3000);
+        }
+      },
+
+      async initAccounts(offBudget) {
+        this.loading = true;
+        try {
+          const r = await fetch('/api/accounts/init?off_budget=' + offBudget, { method: 'POST' });
+          const d = await r.json();
+          if (d.job_id) {
+            this.notice = `Init started (job #${d.job_id}) — check Logs for progress. Reload page to see updated mapping.`;
+          } else {
+            this.error = d.detail || 'Could not start job.';
+          }
+        } finally {
+          this.loading = false;
+        }
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Config page
+  // ---------------------------------------------------------------------------
+  function configPage() {
+    const cfg = {{ config | default({}) | tojson }};
+    const presets = {{ cron_presets | default({}) | tojson }};
+    return {
+      form: {
+        url:                  cfg.actual?.url           || 'http://localhost:5006',
+        password:             '',
+        budget_name:          cfg.actual?.budget_name   || '',
+        encryption_password:  '',
+        since_date:           cfg.sync?.since_date      || '',
+        cron_schedule:        cfg.sync?.cron_schedule   || '*/30 * * * *',
+        timezone:             cfg.sync?.timezone        || 'Europe/Berlin',
+      },
+      cronDesc: {{ cron_description | default('') | tojson }},
+      cronPresets: presets,
+      saving: false,
+      saved: false,
+      saveError: '',
+
+      async fetchCronDesc() {
+        const r = await fetch('/api/cron/describe?expr=' + encodeURIComponent(this.form.cron_schedule));
+        const d = await r.json();
+        this.cronDesc = d.description;
+      },
+
+      async saveConfig() {
+        this.saving = true;
+        this.saveError = '';
+        try {
+          const r = await fetch('/api/config/save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(this.form),
+          });
+          const d = await r.json();
+          if (d.status === 'ok') {
+            this.saved = true;
+            setTimeout(() => this.saved = false, 3000);
+          } else {
+            this.saveError = d.detail || 'Error saving configuration.';
+          }
+        } catch (e) {
+          this.saveError = 'Request failed: ' + e.message;
+        } finally {
+          this.saving = false;
+        }
+      },
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Logs page
+  // ---------------------------------------------------------------------------
+  function logsPage() {
+    return {
+      logLines: [],
+      autoRefresh: false,
+      loaded: false,
+      _timer: null,
+
+      async init() {
+        await this.loadLogs();
+      },
+
+      async loadLogs() {
+        try {
+          const r = await fetch('/api/logs/stream?lines=300');
+          const d = await r.json();
+          this.logLines = d.lines || [];
+          this.loaded = true;
+          if (!this.autoRefresh) {
+            this.$nextTick(() => this.scrollToBottom());
+          }
+        } catch (e) {
+          console.error('Log fetch failed:', e);
+        }
+      },
+
+      scrollToBottom() {
+        const c = document.getElementById('log-container');
+        if (c) c.scrollTop = c.scrollHeight;
+      },
+
+      toggleAutoRefresh() {
+        clearInterval(this._timer);
+        if (this.autoRefresh) {
+          this._timer = setInterval(() => this.loadLogs(), 3000);
+        }
+      },
+
+      logClass(line) {
+        if (line.includes('[ERROR]'))   return 'log-error';
+        if (line.includes('[WARNING]')) return 'log-warning';
+        if (line.includes('[DEBUG]'))   return 'log-debug';
+        return 'log-info';
+      },
+    };
+  }
+  </script>
+</body>
+</html>

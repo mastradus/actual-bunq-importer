@@ -385,8 +385,17 @@ def run_sync(config, config_path, full_sync=False, since_date=None):
                 transactions.append(tx)
         result = actual.import_transactions(transactions)
 
+        # Only advance state when at least one transaction was accepted
+        # (imported or skipped-as-duplicate). If every transaction errored,
+        # we keep the old cursor so they are retried on the next run.
         if max_payment_id and max_payment_id != (last_id or 0):
-            state.set_last_payment_id(bunq_account_id, max_payment_id) 
+            if result["imported"] > 0 or result["skipped"] > 0:
+                state.set_last_payment_id(bunq_account_id, max_payment_id)
+            else:
+                logger.warning(
+                    f"Account {bunq_account_id}: all {result['errors']} transaction(s) errored — "
+                    f"state not advanced (will retry on next run)."
+                )
 
 
         logger.info(

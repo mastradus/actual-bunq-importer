@@ -1,0 +1,4 @@
+# bunq → Actual Budget sync schedule
+# This file is managed by the Web UI — manual edits will be overwritten.
+# Format: min hour dom month dow command
+*/30 * * * * cd /app && python3 /app/sync.py

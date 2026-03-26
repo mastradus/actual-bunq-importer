@@ -55,7 +55,7 @@ class ActualClient:
             base_url=self.base_url,
             password=self.password,
             file=self.budget_name,
-            cert=False,
+            cert=self.cert,
             encryption_password=self.encryption_password,
             data_dir=self.data_dir,
         )
@@ -499,42 +499,3 @@ def _get_or_create_payee(session, payee_name: str):
     return create_payee(session, payee_name)
 
 
-def _set_financial_id_on_transfer(session, imported_id: str, tx_date, amount):
-    """Set financial_id on the source side of a just-created transfer for deduplication.
-
-    create_transfer() does not accept an imported_id parameter, so we manually
-    set financial_id on the most recently created outgoing transfer transaction.
-    Matched by: date + negative amount (source side sends money out).
-
-    Args:
-        session:     SQLAlchemy session
-        imported_id: The bunq-{id} string to store as financial_id
-        tx_date:     Date of the transfer (datetime.date)
-        amount:      Positive Decimal — source side is stored as negative, so we negate
-    """
-    import decimal
-    from actual.database import Transactions
-
-    negative_amount = -abs(decimal.Decimal(str(amount)))
-    # Amount in DB is stored as integer cents (* 100)
-    amount_cents = int(negative_amount * 100)
-
-    tx = (
-        session.query(Transactions)
-        .filter(
-            Transactions.date       == tx_date.strftime("%Y-%m-%d"),
-            Transactions.amount     == amount_cents,
-            Transactions.financial_id.is_(None),   # Not yet tagged
-            Transactions.tombstone  == 0,
-        )
-        .order_by(Transactions.id.desc())           # Most recently created first
-        .first()
-    )
-    if tx:
-        tx.financial_id = imported_id
-        logger.debug(f"Set financial_id={imported_id} on transfer tx {tx.id}")
-    else:
-        logger.warning(
-            f"Could not find source side of transfer {imported_id} "
-            f"(date={tx_date}, amount_cents={amount_cents}) — duplicate check may miss it"
-        )

@@ -10,6 +10,7 @@ Handles all communication with the bunq API:
 import json
 import uuid
 import logging
+import urllib.parse
 import requests
 from pathlib import Path
 from cryptography.hazmat.primitives import hashes, serialization
@@ -335,7 +336,6 @@ def get_monetary_accounts(session_token: str, user_id: int) -> list[dict]:
         if not older_url:
             break
 
-        import urllib.parse
         parsed = urllib.parse.urlparse(older_url)
         qs     = urllib.parse.parse_qs(parsed.query)
         if "older_id" in qs:
@@ -413,18 +413,21 @@ def get_payments(session_token: str, user_id: int, account_id: int,
         if stop_pagination:
             break
 
-        # Check if there are more (older) pages — for initial full sync
+        # Check if there are more (older) pages
         pagination = response.get("Pagination", {})
         older_url  = pagination.get("older_url")
 
-        if not older_url or newer_than_id:
+        if not older_url:
             break
 
-        import urllib.parse
         parsed = urllib.parse.urlparse(older_url)
         qs = urllib.parse.parse_qs(parsed.query)
         if "older_id" in qs:
             params = {"count": count, "older_id": qs["older_id"][0]}
+            # For incremental sync: also carry newer_id so bunq keeps the
+            # upper bound and we don't re-fetch already-known payments
+            if newer_than_id:
+                params["newer_id"] = newer_than_id
         else:
             break
 
