@@ -15,6 +15,7 @@ Imports bank transactions from [bunq](https://www.bunq.com/) into [Actual Budget
 ## Features
 
 - Incremental sync via cursor-based pagination (only fetches new transactions)
+- Sync from multiple sub accounts in Bunq
 - Automatic internal transfer detection between own bunq accounts
 - Duplicate detection via `financial_id` / `imported_id`
 - Opening balance calculation for initial import
@@ -22,6 +23,7 @@ Imports bank transactions from [bunq](https://www.bunq.com/) into [Actual Budget
 - All transactions imported as **cleared**
 - Persistent sync state per account (survives restarts)
 - Rotating log file support
+- detects auto transfer from a sallary transaction
 
 ## Requirements
 
