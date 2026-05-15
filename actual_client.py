@@ -287,6 +287,7 @@ class ActualClient:
                             tx["amount"],         # amount: Decimal, negative = outgoing
                             imported_id,          # imported_id -> stored as financial_id in DB
                             True,                 # cleared: bunq transactions are always settled
+                            tx["payee_name"],     # imported payee
                         )
                         imported += 1
                         logger.debug(
