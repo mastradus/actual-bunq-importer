@@ -257,6 +257,10 @@ class ActualClient:
                         )
                         source_tx.financial_id = imported_id
 
+                        # Run rules on both sides of the transfer
+                        ruleset.run(source_tx)
+                        ruleset.run(dest_tx)
+
                         imported += 1
                         logger.debug(
                             f"Transfer queued: {imported_id} | "
