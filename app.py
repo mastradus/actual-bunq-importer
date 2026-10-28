@@ -3,9 +3,12 @@
 app.py — FastAPI Web UI for bunq → Actual Budget Sync
 """
 
+import base64
 import json
 import logging
+import os
 import re
+import secrets
 import signal
 import sqlite3
 import subprocess
@@ -15,9 +18,10 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from typing import Optional
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from jinja2 import Environment, FileSystemLoader
 from markupsafe import Markup
 from pydantic import BaseModel
@@ -52,6 +56,71 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 app = FastAPI(title="bunq → Actual Sync")
+
+# ---------------------------------------------------------------------------
+# Optional HTTP basic auth for the web UI (WEB_USERNAME / WEB_PASSWORD)
+# ---------------------------------------------------------------------------
+
+WEB_USERNAME = os.environ.get("WEB_USERNAME", "")
+WEB_PASSWORD = os.environ.get("WEB_PASSWORD", "")
+# The container healthcheck polls /api/status without credentials; it holds no secrets.
+AUTH_EXEMPT_PATHS = {"/api/status"}
+
+if not (WEB_USERNAME and WEB_PASSWORD):
+    logger.warning(
+        "Web UI authentication is disabled; set WEB_USERNAME and WEB_PASSWORD "
+        "to protect it (it can edit the config and start syncs)."
+    )
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    if not (WEB_USERNAME and WEB_PASSWORD) or request.url.path in AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+    header = request.headers.get("authorization", "")
+    if header.lower().startswith("basic "):
+        try:
+            user, _, password = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            user = password = ""
+        user_ok = secrets.compare_digest(user.encode(), WEB_USERNAME.encode())
+        password_ok = secrets.compare_digest(password.encode(), WEB_PASSWORD.encode())
+        if user_ok and password_ok:
+            return await call_next(request)
+    return Response(
+        status_code=401,
+        headers={"WWW-Authenticate": 'Basic realm="bunq-actual-sync", charset="UTF-8"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Cross-site request protection
+# ---------------------------------------------------------------------------
+# Browsers resend cached basic-auth credentials on requests started by other
+# sites, and a page on the internet can POST to a LAN address, so requests
+# that change state must come from the web UI's own origin.
+
+SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+@app.middleware("http")
+async def reject_cross_site(request: Request, call_next):
+    if request.method not in SAFE_METHODS:
+        # Sec-Fetch-Site is only sent over HTTPS and to localhost; plain-HTTP
+        # LAN setups fall back to comparing Origin with the requested host.
+        fetch_site = request.headers.get("sec-fetch-site")
+        origin = request.headers.get("origin")
+        if fetch_site is not None:
+            allowed = fetch_site in ("same-origin", "none")
+        elif origin is not None:
+            hosts = {request.headers.get("host"), request.headers.get("x-forwarded-host")}
+            allowed = urlsplit(origin).netloc in hosts - {None}
+        else:
+            allowed = True  # not sent by a browser (curl, scripts)
+        if not allowed:
+            return Response("Cross-site request rejected", status_code=403)
+    return await call_next(request)
+
 
 # Build a custom Jinja2 Environment with cache disabled.
 # Jinja2 3.1.5+ computes the cache key via frozenset(globals.items()), which
@@ -235,10 +304,27 @@ def write_crontab(schedule: str, enabled: bool = True) -> None:
     else:
         CRONTAB_FILE.write_text("# sync disabled\n")
         logger.info("Crontab disabled — supercronic will idle")
+    _reload_supercronic()
+
+
+def _reload_supercronic() -> None:
+    """Send SIGUSR2 to supercronic so it re-reads the crontab.
+
+    SIGUSR2 is supercronic's reload signal (SIGHUP would terminate it). The
+    process is looked up via /proc because the slim image has no pkill.
+    """
     try:
-        subprocess.run(["pkill", "-HUP", "supercronic"], capture_output=True)
-    except Exception:
-        pass
+        for proc in Path("/proc").iterdir():
+            if not proc.name.isdigit():
+                continue
+            try:
+                exe = (proc / "cmdline").read_bytes().split(b"\0", 1)[0]
+            except OSError:
+                continue
+            if exe.endswith(b"/supercronic"):
+                os.kill(int(proc.name), signal.SIGUSR2)
+    except OSError:
+        pass  # no /proc (not running in the container)
 
 
 # ---------------------------------------------------------------------------

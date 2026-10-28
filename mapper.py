@@ -83,10 +83,13 @@ def bunq_payment_to_actual(
         # --- Transfer detection ---
         # If the counterparty IBAN belongs to one of our own accounts, this is
         # an internal transfer between two of our bunq accounts.
+        # A counterparty IBAN equal to the account's own (e.g. bunq investment
+        # dividends) has no other side, so it is booked as a regular transaction.
         is_internal_transfer = (
             iban_to_account_id is not None
             and counter_iban is not None
             and counter_iban in iban_to_account_id
+            and iban_to_account_id[counter_iban] != actual_account_id
         )
 
         if is_internal_transfer:

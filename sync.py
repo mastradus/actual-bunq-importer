@@ -82,7 +82,8 @@ def _make_actual_client(config):
         base_url=cfg["url"],
         password=cfg["password"],
         budget_name=cfg["budget_name"],
-        cert=cfg.get("cert"),
+        # Same default as the web UI, which doesn't write "cert"; actualpy fails on None
+        cert=cfg.get("cert", False),
         encryption_password=cfg.get("encryption_password"),
         data_dir=cfg.get("data_dir"),
     )
@@ -319,7 +320,8 @@ def run_sync(config, config_path, full_sync=False, since_date=None):
         sys.exit(1)
 
     actual = _make_actual_client(config)
-    state = SyncState(config["sync"]["state_file"])
+    # The web UI doesn't write state_file; fall back to the config.example.json default
+    state = SyncState(config["sync"].get("state_file", "data/sync_state.json"))
     session_token, user_id = bunq_client.create_session(config)
 
     account_map = build_account_map(
@@ -386,10 +388,11 @@ def run_sync(config, config_path, full_sync=False, since_date=None):
         result = actual.import_transactions(transactions)
 
         # Only advance state when at least one transaction was accepted
-        # (imported or skipped-as-duplicate). If every transaction errored,
-        # we keep the old cursor so they are retried on the next run.
+        # (imported or skipped-as-duplicate), or nothing failed (e.g. only
+        # incoming transfer sides, which the other account books). If every
+        # transaction errored, keep the old cursor so they are retried.
         if max_payment_id and max_payment_id != (last_id or 0):
-            if result["imported"] > 0 or result["skipped"] > 0:
+            if result["imported"] > 0 or result["skipped"] > 0 or result["errors"] == 0:
                 state.set_last_payment_id(bunq_account_id, max_payment_id)
             else:
                 logger.warning(

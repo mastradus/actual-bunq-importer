@@ -11,6 +11,7 @@ Key concepts:
 """
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 from actual import Actual
@@ -25,6 +26,10 @@ from actual.queries import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Actual rejects sync requests larger than ACTUAL_UPLOAD_FILE_SYNC_SIZE_LIMIT_MB
+# (20 MB by default), which a full sync of a busy account easily exceeds.
+COMMIT_BATCH_SIZE = 1000
 
 
 class ActualClient:
@@ -137,7 +142,7 @@ class ActualClient:
             Example: {"DE96370190001010428851": "ae5c5577-3fe3-...", ...}
         """
         import re
-        from actual.database import Notes
+        from actual.database import Accounts, Notes
 
         # Regex for a bare IBAN (2 letters + up to 32 alphanumeric chars)
         IBAN_RE = re.compile(r'^[A-Z]{2}[0-9A-Z]{10,30}$')
@@ -150,8 +155,12 @@ class ActualClient:
                 .filter(Notes.id.like("account-%"))
                 .all()
             )
+            # Notes outlive deleted accounts; transfers to those must not be detected
+            live = {a.id for a in actual.session.query(Accounts).filter(Accounts.tombstone == 0)}
             for note_row in notes:
                 account_uuid = note_row.id.removeprefix("account-")
+                if account_uuid not in live:
+                    continue
                 for line in (note_row.note or "").splitlines():
                     line = line.strip()
                     if line.startswith("IBAN:"):
@@ -217,9 +226,13 @@ class ActualClient:
         imported = 0
         skipped  = 0
         errors   = 0
+        committed = 0
 
         with self._open() as actual:
             for tx in transactions:
+                if imported - committed >= COMMIT_BATCH_SIZE:
+                    self._commit(actual, imported - committed)
+                    committed = imported
                 try:
                     imported_id = tx["imported_id"]
 
@@ -296,12 +309,33 @@ class ActualClient:
                     )
                     errors += 1
 
-            # Sync all queued changes to the Actual server in one batch
-            if imported > 0:
-                actual.commit()
-                logger.info(f"Committed {imported} transaction(s) to Actual server.")
+            # Sync the remaining queued changes to the Actual server
+            if imported > committed:
+                self._commit(actual, imported - committed)
 
         return {"imported": imported, "skipped": skipped, "errors": errors}
+
+    def _commit(self, actual: Actual, count: int) -> None:
+        """Sync queued changes to the Actual server.
+
+        actualpy writes them to the local copy in data_dir before sending. If
+        the sync fails, that copy holds transactions the server never got, and
+        the duplicate check would skip them on the next run, so drop it and let
+        the next run download the budget again.
+        """
+        try:
+            actual.commit()
+        except Exception:
+            self._discard_local_copy()
+            raise
+        logger.info(f"Committed {count} transaction(s) to Actual server.")
+
+    def _discard_local_copy(self) -> None:
+        if not self.data_dir:
+            return  # actualpy used a temporary directory
+        for name in ("db.sqlite", "metadata.json"):
+            (Path(self.data_dir) / name).unlink(missing_ok=True)
+        logger.warning("Sync to Actual failed; discarded the local budget copy so the next run downloads it again.")
 
     def set_opening_balance(
         self,
@@ -338,10 +372,16 @@ class ActualClient:
             imported_id = f"opening-balance-{actual_account_id}-{since_date}"
 
             with self._open() as actual:
-                # Remove any previous opening balance so it doesn't skew our sum
-                actual.session.execute(_text(
-                    "DELETE FROM transactions WHERE financial_id = :fid"
-                ), {"fid": imported_id})
+                # Remove any previous opening balance so it doesn't skew our sum.
+                # delete() marks it as deleted and syncs that on commit; a raw SQL
+                # DELETE only changed the local copy, so the server kept the old one
+                # and every re-run added another opening balance.
+                from actual.database import Transactions
+                for old in actual.session.query(Transactions).filter(
+                    Transactions.financial_id == imported_id, Transactions.tombstone == 0
+                ):
+                    old.delete()
+                actual.session.flush()
 
                 # Sum all transactions in Actual for this account (after import)
                 row = actual.session.execute(_text("""
@@ -349,6 +389,7 @@ class ActualClient:
                     FROM transactions
                     WHERE acct      = :acct
                       AND tombstone = 0
+                      AND isParent  = 0
                 """), {"acct": actual_account_id}).fetchone()
 
                 actual_sum_cents = row[0] if row else 0

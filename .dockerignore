@@ -1,0 +1,13 @@
+# Keep secrets, runtime state and local tooling out of the image:
+# config.json holds the bunq API key and private key, and the Dockerfile uses `COPY . .`.
+.git
+.githooks
+venv
+.venv
+__pycache__
+*.pyc
+config/config.json
+data/
+logs/
+*.log
+install.cmd

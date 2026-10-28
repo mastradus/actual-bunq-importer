@@ -8,6 +8,7 @@ Handles all communication with the bunq API:
 """
 
 import json
+import time
 import uuid
 import logging
 import urllib.parse
@@ -123,24 +124,48 @@ def _post(endpoint: str, payload: dict, auth_token: str = None,
     return response.json()
 
 
+# bunq allows 3 GET requests per 3 seconds; stay just under that.
+_GET_INTERVAL = 1.1
+_GET_RETRY_DELAYS = (3, 10, 30)
+_last_get = 0.0
+
+
 def _get(endpoint: str, session_token: str, params: dict = None) -> dict:
     """Perform an authenticated GET request to the bunq API.
+
+    Requests are spaced to respect bunq's rate limit, and retried with a
+    delay on 429 (rate limited), 5xx and connection errors.
 
     Args:
         endpoint:      API path, e.g. '/user/123/monetary-account'
         session_token: Active session token from the last session-server call
         params:        Optional query parameters (used for pagination)
     """
+    global _last_get
     url = f"{BASE_URL}{endpoint}"
-    logger.debug(f"GET {url} params={params}")
-    response = requests.get(
-        url,
-        headers=_default_headers(session_token),
-        params=params,
-        timeout=30
-    )
-    response.raise_for_status()
-    return response.json()
+    for attempt, retry_delay in enumerate(_GET_RETRY_DELAYS + (None,)):
+        time.sleep(max(0.0, _last_get + _GET_INTERVAL - time.monotonic()))
+        _last_get = time.monotonic()
+        logger.debug(f"GET {url} params={params}")
+        try:
+            response = requests.get(
+                url,
+                headers=_default_headers(session_token),
+                params=params,
+                timeout=30
+            )
+        except requests.exceptions.ConnectionError as exc:
+            if retry_delay is None:
+                raise
+            logger.warning(f"bunq GET failed ({exc.__class__.__name__}), retrying in {retry_delay}s")
+            time.sleep(retry_delay)
+            continue
+        if response.status_code in (429, 500, 502, 503, 504) and retry_delay is not None:
+            logger.warning(f"bunq GET returned {response.status_code}, retrying in {retry_delay}s")
+            time.sleep(retry_delay)
+            continue
+        response.raise_for_status()
+        return response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +384,11 @@ def get_payments(session_token: str, user_id: int, account_id: int,
         session_token:  Active session token
         user_id:        bunq user ID
         account_id:     Monetary account ID to query
-        newer_than_id:  Only return payments with ID > this value (incremental sync)
+        newer_than_id:  Only return payments with ID > this value (incremental sync).
+                        Pages are fetched newest first and paging stops at the
+                        first known payment; bunq's newer_id parameter is not
+                        used, because combined with older_id (paging) bunq
+                        ignores it and pages through the whole history.
         count:          Max results per page (bunq max: 200)
         since_date:     Only return payments on or after this date (format: YYYY-MM-DD).
                         Pagination stops as soon as an older payment is encountered.
@@ -371,9 +400,6 @@ def get_payments(session_token: str, user_id: int, account_id: int,
 
     endpoint = f"/user/{user_id}/monetary-account/{account_id}/payment"
     params = {"count": count}
-
-    if newer_than_id:
-        params["newer_id"] = newer_than_id
 
     # Parse the cutoff date once for fast comparison in the loop
     cutoff = None
@@ -394,6 +420,11 @@ def get_payments(session_token: str, user_id: int, account_id: int,
             if "Payment" not in p:
                 continue
             payment = p["Payment"]
+
+            # Incremental sync: newest first, so everything from here on is known
+            if newer_than_id and payment["id"] <= newer_than_id:
+                stop_pagination = True
+                break
 
             # Apply date filter — bunq returns newest first, so once we hit
             # a payment older than the cutoff we can stop fetching more pages
@@ -424,10 +455,6 @@ def get_payments(session_token: str, user_id: int, account_id: int,
         qs = urllib.parse.parse_qs(parsed.query)
         if "older_id" in qs:
             params = {"count": count, "older_id": qs["older_id"][0]}
-            # For incremental sync: also carry newer_id so bunq keeps the
-            # upper bound and we don't re-fetch already-known payments
-            if newer_than_id:
-                params["newer_id"] = newer_than_id
         else:
             break
 
